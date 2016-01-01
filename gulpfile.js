@@ -3,11 +3,12 @@
 
 var $           = require('gulp-load-plugins')();
 var argv        = require('yargs').argv;
-var	gulp	      = require('gulp');
+var gulp        = require('gulp');
 var browserSync = require('browser-sync').create();
 var merge       = require('merge-stream');
 var sequence    = require('run-sequence');
 var colors      = require('colors');
+var dateFormat  = require('dateformat');
 
 // Enter URL of your local server here
 // Example: 'http://localwebsite.dev'
@@ -56,9 +57,6 @@ var PATHS = {
     // Motion UI
     'assets/components/motion-ui/motion-ui.js',
 
-    // What-input
-    'assets/components/what-input/what-input.js',
-    
     // Include your own custom scripts (located in the custom folder)
     'assets/javascript/custom/*.js'
   ],
@@ -79,7 +77,7 @@ var PATHS = {
 
 // Browsersync task
 gulp.task('browser-sync', ['build'], function() {
-  
+
   var files = [
             '**/*.php',
             'assets/images/**/*.{png,jpg,gif}'
@@ -88,15 +86,15 @@ gulp.task('browser-sync', ['build'], function() {
   browserSync.init(files, {
     // Proxy address
     proxy: URL,
-    
-    // Port # 
+
+    // Port #
     // port: PORT
   });
 });
 
 // Compile Sass into CSS
 // In production, the CSS is compressed
-gulp.task('sass', function() {  
+gulp.task('sass', function() {
   // Minify CSS if run wtih --production flag
   var minifycss = $.if(isProduction, $.minifyCss());
 
@@ -104,8 +102,11 @@ gulp.task('sass', function() {
     .pipe($.sourcemaps.init())
     .pipe($.sass({
       includePaths: PATHS.sass
-    })
-      .on('error', $.sass.logError))
+    }))
+    .on('error', $.notify.onError({
+        message: "<%= error.message %>",
+        title: "Sass Error"
+    }))
     .pipe($.autoprefixer({
       browsers: COMPATIBILITY
     }))
@@ -115,14 +116,32 @@ gulp.task('sass', function() {
     .pipe(browserSync.stream({match: '**/*.css'}));
 });
 
+// Lint all JS files in custom directory
+gulp.task('lint', function() {
+  return gulp.src('assets/javascript/custom/*.js')
+    .pipe($.jshint())
+    .pipe($.notify(function (file) {
+      if (file.jshint.success) {
+        return false;
+      }
+
+      var errors = file.jshint.results.map(function (data) {
+        if (data.error) {
+          return "(" + data.error.line + ':' + data.error.character + ') ' + data.error.reason;
+        }
+      }).join("\n");
+      return file.relative + " (" + file.jshint.results.length + " errors)\n" + errors;
+    }));
+});
+
 // Combine JavaScript into one file
 // In production, the file is minified
 gulp.task('javascript', function() {
-  
   var uglify = $.uglify()
-    .on('error', function (e) {
-      console.log(e);
-    });
+    .on('error', $.notify.onError({
+      message: "<%= error.message %>",
+      title: "Uglify JS Error"
+    }));
 
   return gulp.src(PATHS.javascript)
     .pipe($.sourcemaps.init())
@@ -155,9 +174,9 @@ gulp.task('copy', function() {
 // Package task
 gulp.task('package', ['build'], function() {
   var fs = require('fs');
+  var time = dateFormat(new Date(), "yyyy-mm-dd_HH-MM");
   var pkg = JSON.parse(fs.readFileSync('./package.json'));
-  var time = $.util.date(new Date(), '_yyyy-mm-dd_HH-MM');
-  var title = pkg.name + time + '.zip';
+  var title = pkg.name + '_' + time + '.zip';
 
   return gulp.src(PATHS.pkg)
     .pipe($.zip(title))
@@ -168,8 +187,31 @@ gulp.task('package', ['build'], function() {
 // Runs copy then runs sass & javascript in parallel
 gulp.task('build', function(done) {
   sequence('copy',
-          ['sass', 'javascript'],
+          ['sass', 'javascript', 'lint'],
           done);
+});
+
+// PHP Code Sniffer task
+gulp.task('phpcs', function() {
+  return gulp.src(['*.php'])
+    .pipe($.phpcs({
+      bin: 'wpcs/vendor/bin/phpcs',
+      standard: './codesniffer.ruleset.xml',
+      showSniffCode: true,
+    }))
+    .pipe($.phpcs.reporter('log'));
+});
+
+// PHP Code Beautifier task
+gulp.task('phpcbf', function () {
+  return gulp.src(['*.php'])
+  .pipe($.phpcbf({
+    bin: 'wpcs/vendor/bin/phpcbf',
+    standard: './codesniffer.ruleset.xml',
+    warningSeverity: 0
+  }))
+  .on('error', $.util.log)
+  .pipe(gulp.dest('.'));
 });
 
 // Default gulp task
@@ -188,7 +230,7 @@ gulp.task('default', ['build', 'browser-sync'], function() {
     });
 
   // JS Watch
-  gulp.watch(['assets/javascript/custom/**/*.js'], ['javascript'])
+  gulp.watch(['assets/javascript/custom/**/*.js'], ['javascript', 'lint'])
     .on('change', function(event) {
       logFileChange(event);
     });
